@@ -1,4 +1,5 @@
 {
+<<<<<<< HEAD
   "name": "presentacion-gemini",
   "version": "0.1.0",
   "private": true,
@@ -43,6 +44,15 @@
   },
   "description": "This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).",
   "main": "index.js",
+=======
+  "name": "entrevista",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+>>>>>>> 9a3ab1e (Monorepo: frontend + backend)
   "keywords": [],
   "author": "",
   "license": "ISC"
