@@ -24,13 +24,7 @@ import s9 from "./assets/genibot/9.png";
 import s10 from "./assets/genibot/10.png";
 import s11 from "./assets/genibot/11.png";
 
-function safeParseJSON(str, fallback) {
-  try {
-    return JSON.parse(str);
-  } catch {
-    return fallback;
-  }
-}
+
 
 const DEFAULT_SESSION_ID = "demo-session";
 
