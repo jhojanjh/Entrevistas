@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronRight,
   ChevronLeft,
@@ -9,6 +9,7 @@ import {
   Eye,
 } from "lucide-react";
 import "./index.css";
+import { socket } from "./socket";
 
 // ✅ IMPORTA TUS SLIDES (ya los tienes en src/assets/genibot/)
 import s1 from "./assets/genibot/1.png";
@@ -23,74 +24,105 @@ import s9 from "./assets/genibot/9.png";
 import s10 from "./assets/genibot/10.png";
 import s11 from "./assets/genibot/11.png";
 
+function safeParseJSON(str, fallback) {
+  try {
+    return JSON.parse(str);
+  } catch {
+    return fallback;
+  }
+}
+
+const DEFAULT_SESSION_ID = "demo-session";
+
 const InteractivePresentation = () => {
+  // ─────────────────────────────────────────────────────────────
+  // Estado UI
+  // ─────────────────────────────────────────────────────────────
   const [userType, setUserType] = useState(null); // 'presenter' | 'participant'
   const [participantName, setParticipantName] = useState("");
   const [participantNameInput, setParticipantNameInput] = useState("");
 
-  const [sessionId] = useState("demo-session");
+  // ✅ Session ID editable (opcional)
+  const [sessionId] = useState(DEFAULT_SESSION_ID);
 
-  // Estado compartido (sincronizado por localStorage)
+  // Estado sincronizado por backend
   const [currentSlide, setCurrentSlide] = useState(0);
   const [quizActive, setQuizActive] = useState(false);
   const [showResults, setShowResults] = useState(false);
 
-  // respuestas
-  const [participantAnswers, setParticipantAnswers] = useState({});
+  // Participantes y respuestas (desde backend)
+  const [participants, setParticipants] = useState([]);
+  const [participantAnswers, setParticipantAnswers] = useState({}); // { participantId: { name, answers } }
+
+  // Respuestas propias (participante)
   const [myAnswers, setMyAnswers] = useState({});
 
-  // ✅ Slides desde Canva (imágenes)
-  const slides = [
-    { title: "Slide 1", imageSrc: s1, alt: "Genibot - Slide 1" },
-    { title: "Slide 2", imageSrc: s2, alt: "Genibot - Slide 2" },
-    { title: "Slide 3", imageSrc: s3, alt: "Genibot - Slide 3" },
-    { title: "Slide 4", imageSrc: s4, alt: "Genibot - Slide 4" },
-    { title: "Slide 5", imageSrc: s5, alt: "Genibot - Slide 5" },
-    { title: "Slide 6", imageSrc: s6, alt: "Genibot - Slide 6" },
-    { title: "Slide 7", imageSrc: s7, alt: "Genibot - Slide 7" },
-    { title: "Slide 8", imageSrc: s8, alt: "Genibot - Slide 8" },
-    { title: "Slide 9", imageSrc: s9, alt: "Genibot - Slide 9" },
-    { title: "Slide 10", imageSrc: s10, alt: "Genibot - Slide 10" },
-    { title: "Slide 11", imageSrc: s11, alt: "Genibot - Slide 11" },
-  ];
+  // Identidad del participante (asignada por backend)
+  const [participantId, setParticipantId] = useState(() => {
+    // persistimos para que al recargar no pierda su id
+    return localStorage.getItem(`${DEFAULT_SESSION_ID}-pid`) || "";
+  });
 
-  // ✅ Quiz (ajústalo si quieres)
-  const quizQuestions = [
-    {
-      id: 1,
-      question: "¿Qué tipo de luz utiliza el sensor HW-201?",
-      options: ["Luz UV", "Luz infrarroja (IR)", "Luz visible", "Luz láser"],
-      correct: 1,
-    },
-    {
-      id: 2,
-      question: "¿Cómo detecta un obstáculo el sensor infrarrojo?",
-      options: [
-        "Por temperatura",
-        "Por sonido",
-        "Por el rebote de la luz IR",
-        "Por vibración",
-      ],
-      correct: 2,
-    },
-    {
-      id: 3,
-      question: "¿A qué pin se conecta la señal OUT del sensor en Genibot?",
-      options: ["P2", "P3", "P4 (AIN)", "P5 (GND)"],
-      correct: 2,
-    },
-    {
-      id: 4,
-      question: "¿Qué hace Genibot en Scratch con el valor leído en AIN?",
-      options: [
-        "Lo ignora",
-        "Lo compara con un umbral para decidir acciones",
-        "Lo convierte en sonido automáticamente",
-        "Lo envía por Bluetooth siempre",
-      ],
-      correct: 1,
-    },
-  ];
+  const joinedRef = useRef(false);
+
+  // ✅ Slides desde Canva (imágenes)
+  const slides = useMemo(
+    () => [
+      { title: "Slide 1", imageSrc: s1, alt: "Genibot - Slide 1" },
+      { title: "Slide 2", imageSrc: s2, alt: "Genibot - Slide 2" },
+      { title: "Slide 3", imageSrc: s3, alt: "Genibot - Slide 3" },
+      { title: "Slide 4", imageSrc: s4, alt: "Genibot - Slide 4" },
+      { title: "Slide 5", imageSrc: s5, alt: "Genibot - Slide 5" },
+      { title: "Slide 6", imageSrc: s6, alt: "Genibot - Slide 6" },
+      { title: "Slide 7", imageSrc: s7, alt: "Genibot - Slide 7" },
+      { title: "Slide 8", imageSrc: s8, alt: "Genibot - Slide 8" },
+      { title: "Slide 9", imageSrc: s9, alt: "Genibot - Slide 9" },
+      { title: "Slide 10", imageSrc: s10, alt: "Genibot - Slide 10" },
+      { title: "Slide 11", imageSrc: s11, alt: "Genibot - Slide 11" },
+    ],
+    []
+  );
+
+  // ✅ Quiz
+  const quizQuestions = useMemo(
+    () => [
+      {
+        id: 1,
+        question: "¿Qué tipo de luz utiliza el sensor HW-201?",
+        options: ["Luz UV", "Luz infrarroja (IR)", "Luz visible", "Luz láser"],
+        correct: 1,
+      },
+      {
+        id: 2,
+        question: "¿Cómo detecta un obstáculo el sensor infrarrojo?",
+        options: [
+          "Por temperatura",
+          "Por sonido",
+          "Por el rebote de la luz IR",
+          "Por vibración",
+        ],
+        correct: 2,
+      },
+      {
+        id: 3,
+        question: "¿A qué pin se conecta la señal OUT del sensor en Genibot?",
+        options: ["P2", "P3", "P4 (AIN)", "P5 (GND)"],
+        correct: 2,
+      },
+      {
+        id: 4,
+        question: "¿Qué hace Genibot en Scratch con el valor leído en AIN?",
+        options: [
+          "Lo ignora",
+          "Lo compara con un umbral para decidir acciones",
+          "Lo convierte en sonido automáticamente",
+          "Lo envía por Bluetooth siempre",
+        ],
+        correct: 1,
+      },
+    ],
+    []
+  );
 
   // ✅ Pre-carga de imágenes (evita parpadeo)
   useEffect(() => {
@@ -98,126 +130,185 @@ const InteractivePresentation = () => {
       const img = new Image();
       img.src = s.imageSrc;
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [slides]);
 
-  // ✅ Participante: leer estado del presentador
+  // ─────────────────────────────────────────────────────────────
+  // SOCKET: conectar, unirse y escuchar updates
+  // ─────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (userType === "participant") {
-      const interval = setInterval(() => {
-        const presenterState = localStorage.getItem(
-          `${sessionId}-presenter-state`
-        );
-        if (presenterState) {
-          try {
-            const state = JSON.parse(presenterState);
-            if (typeof state.currentSlide === "number") {
-              setCurrentSlide(state.currentSlide);
-              setQuizActive(!!state.quizActive);
-              setShowResults(!!state.showResults);
-            }
-          } catch (e) {
-            console.error("Error leyendo estado del presentador", e);
-          }
+    if (!userType) return; // todavía no eligió rol
+
+    // Participante necesita nombre antes de unirse
+    if (userType === "participant" && !participantName) return;
+
+    // Evitar doble-join
+    if (joinedRef.current) return;
+    joinedRef.current = true;
+
+    // Conecta socket
+    if (!socket.connected) socket.connect();
+
+    // Listeners
+    const onStateUpdate = (s) => {
+      if (!s) return;
+      if (typeof s.currentSlide === "number") setCurrentSlide(s.currentSlide);
+      setQuizActive(!!s.quizActive);
+      setShowResults(!!s.showResults);
+    };
+
+    const onAnswersUpdate = (a) => {
+      // Backend manda: { participantId: { name, answers, updatedAt }, ... }
+      setParticipantAnswers(a || {});
+    };
+
+    const onParticipantsUpdate = (p) => {
+      setParticipants(Array.isArray(p) ? p : []);
+    };
+
+    const onSessionReset = () => {
+      // reset suave
+      setCurrentSlide(0);
+      setQuizActive(false);
+      setShowResults(false);
+      setParticipantAnswers({});
+      setParticipants([]);
+      setMyAnswers({});
+      // Si quieres volver al inicio total:
+      setUserType(null);
+      setParticipantName("");
+      setParticipantNameInput("");
+      // participantId se mantiene (no lo borramos), pero puedes borrarlo si prefieres:
+      // setParticipantId("");
+      // localStorage.removeItem(`${DEFAULT_SESSION_ID}-pid`);
+      joinedRef.current = false;
+    };
+
+    socket.on("state:update", onStateUpdate);
+    socket.on("answers:update", onAnswersUpdate);
+    socket.on("participants:update", onParticipantsUpdate);
+    socket.on("session:reset", onSessionReset);
+
+    // Join
+    socket.emit(
+      "session:join",
+      {
+        sessionId,
+        role: userType,
+        name: userType === "participant" ? participantName : undefined,
+      },
+      (ack) => {
+        if (ack?.ok && ack?.participantId) {
+          setParticipantId(ack.participantId);
+          localStorage.setItem(`${DEFAULT_SESSION_ID}-pid`, ack.participantId);
         }
-      }, 400);
-      return () => clearInterval(interval);
-    }
-  }, [userType, sessionId]);
+        if (ack?.state) onStateUpdate(ack.state);
+      }
+    );
 
-  // ✅ Presentador: guardar estado
-  useEffect(() => {
-    if (userType === "presenter") {
-      const state = {
-        currentSlide,
-        quizActive,
-        showResults,
-        timestamp: Date.now(),
-      };
-      localStorage.setItem(`${sessionId}-presenter-state`, JSON.stringify(state));
-    }
-  }, [currentSlide, quizActive, showResults, userType, sessionId]);
+    return () => {
+      socket.off("state:update", onStateUpdate);
+      socket.off("answers:update", onAnswersUpdate);
+      socket.off("participants:update", onParticipantsUpdate);
+      socket.off("session:reset", onSessionReset);
+      // No desconectamos para no romper hot reload, pero si quieres:
+      // socket.disconnect();
+      joinedRef.current = false;
+    };
+  }, [userType, participantName, sessionId]);
 
-  // ✅ Participante: enviar respuestas
-  useEffect(() => {
-    if (userType === "participant" && participantName) {
-      const answers = localStorage.getItem(`${sessionId}-answers`) || "{}";
-      const allAnswers = JSON.parse(answers);
-      allAnswers[participantName] = myAnswers;
-      localStorage.setItem(`${sessionId}-answers`, JSON.stringify(allAnswers));
-    }
-  }, [myAnswers, userType, participantName, sessionId]);
-
-  // ✅ Presentador: leer respuestas
-  useEffect(() => {
-    if (userType === "presenter") {
-      const interval = setInterval(() => {
-        const answers = localStorage.getItem(`${sessionId}-answers`) || "{}";
-        setParticipantAnswers(JSON.parse(answers));
-      }, 800);
-      return () => clearInterval(interval);
-    }
-  }, [userType, sessionId]);
-
-  const handlePresenterSlideChange = (direction) => {
-    if (direction === "next" && currentSlide < slides.length - 1) {
-      setCurrentSlide((s) => s + 1);
-    } else if (direction === "prev" && currentSlide > 0) {
-      setCurrentSlide((s) => s - 1);
-    }
-  };
-
-  const handleStartQuiz = () => {
-    setQuizActive(true);
-    setShowResults(false);
-    localStorage.setItem(`${sessionId}-answers`, "{}");
-    setParticipantAnswers({});
-  };
-
-  const handleShowResults = () => setShowResults(true);
-
-  const handleBackToPresentation = () => {
-    setQuizActive(false);
-    setShowResults(false);
-  };
-
-  const handleParticipantAnswer = (questionId, optionIndex) => {
-    if (showResults) return;
-    setMyAnswers((prev) => ({ ...prev, [questionId]: optionIndex }));
-  };
-
-  const calculateParticipantScore = (answers) => {
+  // ─────────────────────────────────────────────────────────────
+  // Helpers
+  // ─────────────────────────────────────────────────────────────
+  const calculateParticipantScore = (answersObj) => {
     let correct = 0;
     quizQuestions.forEach((q) => {
-      if (answers[q.id] === q.correct) correct++;
+      if (answersObj?.[q.id] === q.correct) correct++;
     });
     return correct;
   };
 
-  const resetSession = () => {
-    localStorage.removeItem(`${sessionId}-presenter-state`);
-    localStorage.removeItem(`${sessionId}-answers`);
-    setUserType(null);
-    setCurrentSlide(0);
-    setQuizActive(false);
-    setShowResults(false);
-    setParticipantAnswers({});
-    setMyAnswers({});
-    setParticipantName("");
-    setParticipantNameInput("");
+  // ─────────────────────────────────────────────────────────────
+  // Acciones del Presentador (emiten al backend)
+  // ─────────────────────────────────────────────────────────────
+  const handlePresenterSlideChange = (direction) => {
+    const next =
+      direction === "next"
+        ? Math.min(currentSlide + 1, slides.length - 1)
+        : Math.max(currentSlide - 1, 0);
+
+    socket.emit("state:set", {
+      sessionId,
+      patch: { currentSlide: next },
+    });
   };
+
+  const setSlideDirect = (idx) => {
+    const safe = Math.max(0, Math.min(idx, slides.length - 1));
+    socket.emit("state:set", {
+      sessionId,
+      patch: { currentSlide: safe },
+    });
+  };
+
+  const handleStartQuiz = () => {
+    socket.emit("quiz:start", { sessionId });
+  };
+
+  const handleShowResults = () => {
+    socket.emit("quiz:showResults", { sessionId });
+  };
+
+  const handleBackToPresentation = () => {
+    socket.emit("quiz:backToSlides", { sessionId });
+  };
+
+  const resetSession = () => {
+    socket.emit("session:reset", { sessionId });
+  };
+
+  // ─────────────────────────────────────────────────────────────
+  // Acciones del Participante
+  // ─────────────────────────────────────────────────────────────
+  const sendMyAnswersToServer = (nextAnswers) => {
+    if (!participantId) return;
+    socket.emit("answers:set", {
+      sessionId,
+      participantId,
+      name: participantName,
+      answers: nextAnswers,
+    });
+  };
+
+  const handleParticipantAnswer = (questionId, optionIndex) => {
+    if (showResults) return;
+
+    const next = { ...myAnswers, [questionId]: optionIndex };
+    setMyAnswers(next);
+    sendMyAnswersToServer(next);
+  };
+
+  // Cuando el participante entra, manda estado inicial (vacío) para aparecer
+  useEffect(() => {
+    if (userType !== "participant") return;
+    if (!participantName) return;
+    if (!participantId) return;
+
+    // Envía un "ping" con respuestas actuales para que aparezca en vivo
+    sendMyAnswersToServer(myAnswers);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [participantId, userType, participantName]);
 
   // ─────────────────────────────────────────────────────────────
   // UI
   // ─────────────────────────────────────────────────────────────
 
-  // Pantalla de selección de rol
+  // Pantalla selección rol
   if (!userType) {
     return (
       <div className="ip-screen ip-screen--blue">
         <div className="ip-start-container">
           <div className="ip-start-header">
-            <h1 className="ip-title">Genibot</h1>
+            <h1 className="ip-title">Presentación Interactiva</h1>
             <p className="ip-subtitle">Selecciona tu rol para comenzar</p>
           </div>
 
@@ -225,6 +316,8 @@ const InteractivePresentation = () => {
             <div
               onClick={() => setUserType("presenter")}
               className="ip-role-card ip-role-card--presenter"
+              role="button"
+              tabIndex={0}
             >
               <div className="ip-role-card-content">
                 <div className="ip-role-icon ip-role-icon--blue">
@@ -240,6 +333,8 @@ const InteractivePresentation = () => {
             <div
               onClick={() => setUserType("participant")}
               className="ip-role-card ip-role-card--participant"
+              role="button"
+              tabIndex={0}
             >
               <div className="ip-role-card-content">
                 <div className="ip-role-icon ip-role-icon--green">
@@ -257,12 +352,14 @@ const InteractivePresentation = () => {
     );
   }
 
-  // Pantalla de entrada para participantes
+  // Pantalla nombre participante
   if (userType === "participant" && !participantName) {
     const handleJoin = () => {
       const name = participantNameInput.trim();
       if (!name) return;
       setParticipantName(name);
+      // permite que el useEffect haga el join
+      joinedRef.current = false;
     };
 
     return (
@@ -285,7 +382,10 @@ const InteractivePresentation = () => {
           </button>
 
           <button
-            onClick={() => setUserType(null)}
+            onClick={() => {
+              setUserType(null);
+              joinedRef.current = false;
+            }}
             className="ip-button ip-button--ghost"
           >
             Volver
@@ -295,8 +395,12 @@ const InteractivePresentation = () => {
     );
   }
 
-  // VISTA DEL PRESENTADOR
+  // ─────────────────────────────────────────────────────────────
+  // VISTA PRESENTADOR
+  // ─────────────────────────────────────────────────────────────
   if (userType === "presenter") {
+    const participantCount = participants.length;
+
     return (
       <div className="ip-screen ip-screen--gray">
         <div className="ip-layout">
@@ -308,7 +412,7 @@ const InteractivePresentation = () => {
             <div className="ip-header-right">
               <div className="ip-participants-count">
                 <Users size={20} className="ip-header-icon" />
-                <span>{Object.keys(participantAnswers).length} participantes</span>
+                <span>{participantCount} participantes</span>
               </div>
               <button onClick={resetSession} className="ip-link ip-link--danger">
                 Reiniciar sesión
@@ -324,7 +428,7 @@ const InteractivePresentation = () => {
                   <div className="ip-slide-header ip-slide-header--image">
                     <div className="ip-slide-header-top">
                       <span className="ip-slide-counter">
-                        Diapositivas {currentSlide + 1} de {slides.length}
+                        Diapositiva {currentSlide + 1} de {slides.length}
                       </span>
                     </div>
                   </div>
@@ -338,7 +442,6 @@ const InteractivePresentation = () => {
                     />
                   </div>
 
-                  {/* Controles */}
                   <div className="ip-slide-controls">
                     <button
                       onClick={() => handlePresenterSlideChange("prev")}
@@ -353,10 +456,11 @@ const InteractivePresentation = () => {
                       {slides.map((_, idx) => (
                         <button
                           key={idx}
-                          onClick={() => setCurrentSlide(idx)}
+                          onClick={() => setSlideDirect(idx)}
                           className={
                             "ip-dot " + (idx === currentSlide ? "ip-dot--active" : "")
                           }
+                          aria-label={`Ir a diapositiva ${idx + 1}`}
                         />
                       ))}
                     </div>
@@ -430,7 +534,7 @@ const InteractivePresentation = () => {
               )}
             </div>
 
-            {/* Panel de respuestas */}
+            {/* Panel lateral */}
             <div className="ip-side-panel">
               <div className="ip-card ip-card--sticky">
                 <h3 className="ip-side-title">
@@ -443,38 +547,43 @@ const InteractivePresentation = () => {
                     {Object.keys(participantAnswers).length === 0 ? (
                       <p className="ip-empty-state">Esperando respuestas...</p>
                     ) : (
-                      Object.entries(participantAnswers).map(([name, answers]) => (
-                        <div key={name} className="ip-participant-card">
-                          <div className="ip-participant-card-header">
-                            <span className="ip-participant-name">{name}</span>
-                            {showResults && (
-                              <span className="ip-participant-score">
-                                {calculateParticipantScore(answers)}/{quizQuestions.length}
-                              </span>
-                            )}
-                          </div>
+                      Object.entries(participantAnswers).map(([pid, payload]) => {
+                        const answers = payload?.answers || {};
+                        const name = payload?.name || pid;
 
-                          <div className="ip-participant-answers">
-                            {quizQuestions.map((q) => (
-                              <div
-                                key={q.id}
-                                className={
-                                  "ip-answer-badge " +
-                                  (answers[q.id] !== undefined
-                                    ? showResults
-                                      ? answers[q.id] === q.correct
-                                        ? "ip-answer-badge--correct"
-                                        : "ip-answer-badge--incorrect"
-                                      : "ip-answer-badge--answered"
-                                    : "ip-answer-badge--empty")
-                                }
-                              >
-                                {answers[q.id] !== undefined ? q.id : "-"}
-                              </div>
-                            ))}
+                        return (
+                          <div key={pid} className="ip-participant-card">
+                            <div className="ip-participant-card-header">
+                              <span className="ip-participant-name">{name}</span>
+                              {showResults && (
+                                <span className="ip-participant-score">
+                                  {calculateParticipantScore(answers)}/{quizQuestions.length}
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="ip-participant-answers">
+                              {quizQuestions.map((q) => (
+                                <div
+                                  key={q.id}
+                                  className={
+                                    "ip-answer-badge " +
+                                    (answers[q.id] !== undefined
+                                      ? showResults
+                                        ? answers[q.id] === q.correct
+                                          ? "ip-answer-badge--correct"
+                                          : "ip-answer-badge--incorrect"
+                                        : "ip-answer-badge--answered"
+                                      : "ip-answer-badge--empty")
+                                  }
+                                >
+                                  {answers[q.id] !== undefined ? q.id : "-"}
+                                </div>
+                              ))}
+                            </div>
                           </div>
-                        </div>
-                      ))
+                        );
+                      })
                     )}
                   </div>
                 ) : (
@@ -488,7 +597,9 @@ const InteractivePresentation = () => {
     );
   }
 
-  // VISTA DEL PARTICIPANTE
+  // ─────────────────────────────────────────────────────────────
+  // VISTA PARTICIPANTE
+  // ─────────────────────────────────────────────────────────────
   return (
     <div className="ip-screen ip-screen--green">
       <div className="ip-layout ip-layout--narrow">
@@ -499,9 +610,12 @@ const InteractivePresentation = () => {
           </div>
           <button
             onClick={() => {
+              // salir limpia UI
               setParticipantName("");
               setParticipantNameInput("");
               setUserType(null);
+              setMyAnswers({});
+              joinedRef.current = false;
             }}
             className="ip-link"
           >
@@ -562,7 +676,9 @@ const InteractivePresentation = () => {
 
                 {Object.keys(myAnswers).length === quizQuestions.length && (
                   <div className="ip-quiz-status ip-quiz-status--done">
-                    <p className="ip-quiz-status-main">✓ Todas las respuestas enviadas</p>
+                    <p className="ip-quiz-status-main">
+                      ✓ Todas las respuestas enviadas
+                    </p>
                     <p className="ip-quiz-status-sub">
                       Esperando a que el presentador muestre resultados...
                     </p>
@@ -625,3 +741,5 @@ const InteractivePresentation = () => {
 export default function App() {
   return <InteractivePresentation />;
 }
+
+export { socket };
